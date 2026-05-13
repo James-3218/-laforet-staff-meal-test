@@ -1,51 +1,162 @@
 /* ============================================
    LAFORÊT STAFF MEAL — script.js
-   Handles both login (index.html) and
-   personal preference page (staff.html)
+   Handles login (index.html) and staff page (staff.html)
    ============================================ */
 
 /* ── SET YOUR APPS SCRIPT WEB APP URL HERE ── */
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzL56P9ofzAAYHHiMjZIeKpaARe2HZp40FOl9FuxFVmzK1_qLWg78DfuudEKalAYgD0/exec';
 
 /* ════════════════════════════════════════════
-   BASE STAFF DATA (hardcoded, read-only)
-   Extra/deleted staff come from Google Sheets
+   STAFF DATA — live arrays rebuilt from cache/server
+   Kept for compatibility with login autocomplete,
+   staff page dept display, and admin_script.js
    ════════════════════════════════════════════ */
 
-const staffNames = [
-  "Jeolita","Maha Marzi","Noriko","Yohan",
-  "Sima Kokabian","Sumu Sharma","Umesh Ranasingha",
-  "Alexander Bangoy","Dan B Kil","George Jose Abaygar",
-  "Hanbin Chung","Heesue Choi","Jeongwoo","Kayla Moon",
-  "Miradee Chua","Seoyeun Joanna Bae","Trishita","Wonhyeok Cho",
-  "Yena Kim","Yisol Han",
-  "Dabin Shin","Hyangmi Kim","Inhoo Choi","Joyce Danielle Pamilar",
-  "Sam K Lee","Saurabh Rana","Taekyung Han","Tristin James Louis",
-  "Wonju Choi","Ben","Eunho Park"
-];
+let staffNames       = [];   // array of name strings
+let staffDepartments = {};   // { name: dept }
 
-const staffDepartments = {
-  "Jeolita":"Bakery","Maha Marzi":"Bakery","Noriko":"Bakery","Yohan":"Bakery",
-  "Sima Kokabian":"Dish","Sumu Sharma":"Dish","Umesh Ranasingha":"Dish",
-  "Alexander Bangoy":"FOH","Dan B Kil":"FOH","George Jose Abaygar":"FOH",
-  "Hanbin Chung":"FOH","Heesue Choi":"FOH","Jeongwoo":"FOH","Kayla Moon":"FOH",
-  "Miradee Chua":"FOH","Seoyeun Joanna Bae":"FOH","Trishita":"FOH","Wonhyeok Cho":"FOH",
-  "Yena Kim":"FOH","Yisol Han":"FOH",
-  "Dabin Shin":"Kitchen","Hyangmi Kim":"Kitchen","Inhoo Choi":"Kitchen",
-  "Joyce Danielle Pamilar":"Kitchen","Sam K Lee":"Kitchen","Saurabh Rana":"Kitchen",
-  "Taekyung Han":"Kitchen","Tristin James Louis":"Kitchen","Wonju Choi":"Kitchen",
-  "Ben":"Store Support","Eunho Park":"Store Support"
-};
+/* ════════════════════════════════════════════
+   EMERGENCY FALLBACK
+   Only used if cache AND server both fail.
+   ════════════════════════════════════════════ */
+
+function getEmergencyStaffFallback() {
+  return [
+    { name: "Jeolita",              dept: "Bakery" },
+    { name: "Maha Marzi",           dept: "Bakery" },
+    { name: "Noriko",               dept: "Bakery" },
+    { name: "Yohan",                dept: "Bakery" },
+    { name: "Sima Kokabian",        dept: "Dish" },
+    { name: "Sumu Sharma",          dept: "Dish" },
+    { name: "Umesh Ranasingha",     dept: "Dish" },
+    { name: "Alexander Bangoy",     dept: "FOH" },
+    { name: "Dan B Kil",            dept: "FOH" },
+    { name: "George Jose Abaygar",  dept: "FOH" },
+    { name: "Hanbin Chung",         dept: "FOH" },
+    { name: "Heesue Choi",          dept: "FOH" },
+    { name: "Jeongwoo",             dept: "FOH" },
+    { name: "Kayla Moon",           dept: "FOH" },
+    { name: "Miradee Chua",         dept: "FOH" },
+    { name: "Seoyeun Joanna Bae",   dept: "FOH" },
+    { name: "Trishita",             dept: "FOH" },
+    { name: "Wonhyeok Cho",         dept: "FOH" },
+    { name: "Yena Kim",             dept: "FOH" },
+    { name: "Yisol Han",            dept: "FOH" },
+    { name: "Juseok Oh",            dept: "FOH" },
+    { name: "Ivy Kang",             dept: "FOH" },
+    { name: "Dabin Shin",           dept: "Kitchen" },
+    { name: "Hyangmi Kim",          dept: "Kitchen" },
+    { name: "Inhoo Choi",           dept: "Kitchen" },
+    { name: "Joyce Danielle Pamilar", dept: "Kitchen" },
+    { name: "Sam K Lee",            dept: "Kitchen" },
+    { name: "Saurabh Rana",         dept: "Kitchen" },
+    { name: "Taekyung Han",         dept: "Kitchen" },
+    { name: "Tristin James Louis",  dept: "Kitchen" },
+    { name: "Wonju Choi",           dept: "Kitchen" },
+    { name: "Ben",                  dept: "Store Support" },
+    { name: "Eunho Park",           dept: "Store Support" }
+  ];
+}
+
+/* ════════════════════════════════════════════
+   STAFF CACHE (localStorage, 5-min TTL)
+   ════════════════════════════════════════════ */
+
+const STAFF_CACHE_KEY      = 'laforet_staff_cache';
+const STAFF_CACHE_TIME_KEY = 'laforet_staff_cache_time';
+const STAFF_CACHE_TTL_MS   = 5 * 60 * 1000; // 5 minutes
+
+function getCachedStaff() {
+  try {
+    const raw = localStorage.getItem(STAFF_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch(e) { return null; }
+}
+
+function setCachedStaff(staffList) {
+  try {
+    localStorage.setItem(STAFF_CACHE_KEY, JSON.stringify(staffList));
+    localStorage.setItem(STAFF_CACHE_TIME_KEY, Date.now().toString());
+  } catch(e) {}
+}
+
+function isStaffCacheFresh() {
+  try {
+    const t = parseInt(localStorage.getItem(STAFF_CACHE_TIME_KEY) || '0', 10);
+    return (Date.now() - t) < STAFF_CACHE_TTL_MS;
+  } catch(e) { return false; }
+}
+
+/* Apply a staff list [{name, dept}] to the live arrays */
+function applyStaffList(staffList) {
+  staffNames       = staffList.map(s => s.name);
+  staffDepartments = {};
+  staffList.forEach(s => { staffDepartments[s.name] = s.dept; });
+}
+
+/* ════════════════════════════════════════════
+   FAST STAFF LOADING
+   1. Use cache immediately if fresh
+   2. Fetch server in background
+   3. If cache stale/missing, wait for server
+   4. If server fails, use cache or fallback
+   ════════════════════════════════════════════ */
+
+async function loadStaffFast() {
+  const cached = getCachedStaff();
+
+  if (cached && isStaffCacheFresh()) {
+    // Cache is fresh — use it immediately, refresh in background
+    applyStaffList(cached);
+    refreshStaffFromServer().catch(() => {});
+    return;
+  }
+
+  if (cached) {
+    // Cache exists but stale — use it while fetching
+    applyStaffList(cached);
+    try {
+      await refreshStaffFromServer();
+    } catch(e) {
+      console.warn('Laforêt: Server refresh failed, using stale cache');
+    }
+    return;
+  }
+
+  // No cache — must wait for server
+  try {
+    await refreshStaffFromServer();
+  } catch(e) {
+    console.warn('Laforêt: Server failed, using emergency fallback');
+    applyStaffList(getEmergencyStaffFallback());
+  }
+}
+
+async function refreshStaffFromServer() {
+  const res = await gasRequest('getStaff');
+  const staff = res.staff || [];
+  applyStaffList(staff);
+  setCachedStaff(staff);
+}
+
+/* ════════════════════════════════════════════
+   LEGACY: kept for backward compatibility
+   admin_script.js still calls loadExtraStaff()
+   ════════════════════════════════════════════ */
+
+async function loadExtraStaff() {
+  resetWeeklyPreferences().catch(() => {});
+  await loadStaffFast();
+}
 
 /* ════════════════════════════════════════════
    API HELPER — JSONP to bypass CORS
-   GAS does not support CORS headers, so we
-   use JSONP (script tag injection) instead.
    ════════════════════════════════════════════ */
 
 function gasRequest(action, payload) {
   return new Promise((resolve, reject) => {
-    const cbName = '_gasCallback_' + Date.now() + '_' + Math.floor(Math.random() * 9999);
+    const cbName  = '_gasCallback_' + Date.now() + '_' + Math.floor(Math.random() * 9999);
     const data    = { action, ...(payload || {}) };
     const encoded = encodeURIComponent(JSON.stringify(data));
     const url     = GAS_URL + '?callback=' + cbName + '&payload=' + encoded;
@@ -55,12 +166,9 @@ function gasRequest(action, payload) {
       reject(new Error('Request timed out'));
     }, 15000);
 
-    const script = document.createElement('script');
-    script.src   = url;
-    script.onerror = () => {
-      cleanup();
-      reject(new Error('Script load failed — check your GAS URL'));
-    };
+    const script    = document.createElement('script');
+    script.src      = url;
+    script.onerror  = () => { cleanup(); reject(new Error('Script load failed — check your GAS URL')); };
 
     window[cbName] = (result) => {
       cleanup();
@@ -79,15 +187,14 @@ function gasRequest(action, payload) {
 }
 
 /* ════════════════════════════════════════════
-   WEEKLY RESET (Monday — triggers server reset)
+   WEEKLY RESET
    ════════════════════════════════════════════ */
 
 async function resetWeeklyPreferences() {
   try {
     const now = new Date();
-    if (now.getDay() !== 1) return; // Only Mondays
-    const mondayKey = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
-    // Use sessionStorage to avoid duplicate calls in the same tab session
+    if (now.getDay() !== 1) return;
+    const mondayKey = now.toLocaleDateString('en-CA');
     if (sessionStorage.getItem('laforet_reset_sent') === mondayKey) return;
     sessionStorage.setItem('laforet_reset_sent', mondayKey);
     await gasRequest('resetWeekly', { mondayKey });
@@ -97,43 +204,9 @@ async function resetWeeklyPreferences() {
   }
 }
 
-/* Force reset — called by admin Test Reset button */
 async function forceResetPreferences() {
   await gasRequest('forceReset');
   console.log('Laforêt: Force reset done');
-}
-
-/* ════════════════════════════════════════════
-   LOAD STAFF FROM SHEETS
-   ════════════════════════════════════════════ */
-
-async function loadExtraStaff() {
-  // Fire Monday reset check (non-blocking, don't await)
-  resetWeeklyPreferences().catch(() => {});
-
-  try {
-    const { extra, deleted } = await gasRequest('getStaff');
-    const deletedNorm = deleted.map(n => normalizeName(n));
-
-    // Remove deleted base staff from live arrays
-    for (let i = staffNames.length - 1; i >= 0; i--) {
-      if (deletedNorm.includes(normalizeName(staffNames[i]))) staffNames.splice(i, 1);
-    }
-    deletedNorm.forEach(n => {
-      const k = Object.keys(staffDepartments).find(k => normalizeName(k) === n);
-      if (k) delete staffDepartments[k];
-    });
-
-    // Add extra staff
-    extra.forEach(s => {
-      if (!s.name || deletedNorm.includes(normalizeName(s.name))) return;
-      if (!staffNames.find(n => normalizeName(n) === normalizeName(s.name))) staffNames.push(s.name);
-      if (s.dept) staffDepartments[s.name] = s.dept;
-    });
-  } catch(e) {
-    console.warn('Laforêt: Could not load staff from Sheets:', e.message);
-    // Graceful degradation — base staffNames still work offline
-  }
 }
 
 /* ════════════════════════════════════════════
@@ -141,8 +214,6 @@ async function loadExtraStaff() {
    ════════════════════════════════════════════ */
 
 async function initLogin() {
-  await loadExtraStaff();
-
   const input         = document.getElementById('nameInput');
   const suggestionsEl = document.getElementById('suggestions');
   const validationMsg = document.getElementById('validationMsg');
@@ -151,6 +222,7 @@ async function initLogin() {
   let highlighted   = -1;
   let filteredNames = [];
 
+  // Set up event listeners immediately — page is usable right away
   input.addEventListener('input', () => {
     const val = input.value.trim().toLowerCase();
     validationMsg.classList.remove('visible');
@@ -209,6 +281,10 @@ async function initLogin() {
     highlighted   = -1;
     filteredNames = [];
   }
+
+  // Load staff (fast — uses cache if available, doesn't block the UI)
+  resetWeeklyPreferences().catch(() => {});
+  await loadStaffFast();
 }
 
 /* Normalize: lowercase, strip whitespace */
@@ -249,9 +325,7 @@ async function handleContinue() {
     return;
   }
 
-  // Use sessionStorage (shared across tabs, cleared when browser closes)
   sessionStorage.setItem('laforet_staff_name', matchedName);
-
   btnEl.classList.add('success');
   btnText.textContent = `Welcome, ${matchedName.split(' ')[0]} ✓`;
   input.disabled = true;
@@ -276,7 +350,9 @@ async function initStaffPage() {
   document.getElementById('avatarEl').textContent    = initials;
   document.title = `${first} — Laforêt Staff Meal`;
 
-  // Department
+  // Load staff fast so dept shows correctly even if cache is cold
+  await loadStaffFast();
+
   const deptEl = document.getElementById('deptEl');
   const dept   = staffDepartments[name] || '';
   if (deptEl) {
@@ -284,12 +360,10 @@ async function initStaffPage() {
     deptEl.style.display = dept ? '' : 'none';
   }
 
-  // Weekend dates
   const { sat, sun } = getWeekendDates();
   document.getElementById('satDate').textContent = sat;
   document.getElementById('sunDate').textContent = sun;
 
-  // Load prefs from Sheets
   const lastSaved = document.getElementById('lastSaved');
   try {
     const { prefs: allPrefs } = await gasRequest('getPrefs');
@@ -380,7 +454,6 @@ async function savePreference() {
 
   try {
     await gasRequest('savePref', { name, dept, sat: prefs.sat, sun: prefs.sun, note: prefs.note });
-
     btn.classList.add('saved');
     btnText.textContent = 'Saved ✓';
     if (lastSaved) lastSaved.textContent = `Last saved: ${formatSavedAt(new Date().toISOString())}`;
