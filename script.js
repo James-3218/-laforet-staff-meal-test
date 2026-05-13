@@ -4,7 +4,7 @@
    ============================================ */
 
 /* ── SET YOUR APPS SCRIPT WEB APP URL HERE ── */
-const GAS_URL = 'https://script.google.com/macros/s/AKfycby9ooTOwmcEznT-V7ynU9nJ8n2uMTPTT_0cuFWNXtCa1hnWBAWd48P6_o0is1x92pK4hA/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbzJL4h7bynEpwqGFK5xG-42GGKFb0VsF9jvjW7Wmm2W2TASCs2_szQKBhzv1UHuce-l2A/exec';
 
 /* ════════════════════════════════════════════
    STAFF DATA — live arrays rebuilt from cache/server
