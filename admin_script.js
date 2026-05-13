@@ -175,7 +175,7 @@ function slRenderList(staff) {
         '<div class="sl-name">' + s.name + '</div>' +
         '<div class="sl-dept">' + (s.dept || '—') + '</div>' +
       '</div>' +
-      '<button class="sl-delete-btn" title="Remove ' + s.name + '" onclick="slDeleteStaff('' + safeName + '')">' +
+      '<button class="sl-delete-btn" title="Remove ' + s.name + '" onclick="slDeleteStaff(\'' + safeName + '\')">' +
         '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
           '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' +
         '</svg>' +
@@ -317,3 +317,4 @@ function buildPrintSection(dayName, dateStr, people) {
     ${rows}
   </div>`;
 }
+
