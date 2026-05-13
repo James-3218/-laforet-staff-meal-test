@@ -3,54 +3,83 @@
    Admin meal list page
    ============================================ */
 
-/* ════════════════════════════════════════════
-   LOCAL STAFF MANAGEMENT (extra/deleted)
-   Still uses localStorage for the staff list
-   itself — only meal *choices* go to Sheets.
-   ════════════════════════════════════════════ */
-
 function normalizeName(value) {
   return value.toLowerCase().replace(/\s+/g, '').trim();
 }
 
-/* All active staff = base staffNames + extra from Sheets, minus deleted */
-function getActiveStaffNames() {
-  // staffNames and staffDepartments are already updated by loadExtraStaff()
-  // which runs in initAdminPage → they already exclude deleted and include extra
-  return [...staffNames];
-}
-
-function getAllDepartments() {
-  return { ...staffDepartments };
-}
-
 /* ════════════════════════════════════════════
-   INIT
+   INIT — uses getAdminData (one combined call)
    ════════════════════════════════════════════ */
 
 async function initAdminPage() {
-  // Load staff list from Sheets (merges extra/deleted into live arrays)
-  await loadExtraStaff();
+  resetWeeklyPreferences().catch(() => {});
 
   const { sat, sun } = getWeekendDates();
-  document.getElementById('adminSatDate').textContent  = sat;
-  document.getElementById('adminSunDate').textContent  = sun;
+  document.getElementById('adminSatDate').textContent    = sat;
+  document.getElementById('adminSunDate').textContent    = sun;
   document.getElementById('adminDatesBadge').textContent = `${sat} — ${sun}`;
 
-  await renderAdminLists();
+  // Show loading state immediately
+  ['satList','sunList'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '<div class="admin-empty">Loading…</div>';
+  });
+
+  try {
+    // One combined API call returns both staff and prefs
+    const res = await gasRequest('getAdminData');
+    const staff = res.staff || [];
+    const prefs = res.prefs  || [];
+
+    // Apply staff to live arrays + update cache
+    applyStaffList(staff);
+    setCachedStaff(staff);
+
+    // Render meal lists using the prefs we already have
+    _renderFromPrefs(staff, prefs);
+
+  } catch(e) {
+    console.warn('Laforêt admin: getAdminData failed, falling back:', e.message);
+    // Fallback: load staff fast (cache/fallback), then fetch prefs separately
+    await loadStaffFast();
+    await renderAdminLists();
+  }
 }
 
 /* ════════════════════════════════════════════
-   MEAL APPLICATIONS — fetched from Sheets
+   MEAL LIST RENDERING
    ════════════════════════════════════════════ */
 
-// Cache so print doesn't need a second fetch
 let _cachedApps = null;
 
-async function getMealApplications() {
-  const depts   = getAllDepartments();
-  const deleted = []; // already excluded by loadExtraStaff
+/* Render using staff + prefs already fetched (no extra API call) */
+function _renderFromPrefs(staff, sheetsPrefs) {
+  const prefMap = {};
+  sheetsPrefs.forEach(p => { prefMap[normalizeName(p.name)] = p; });
 
+  const apps = staff.map(s => {
+    const p = prefMap[normalizeName(s.name)];
+    return {
+      name: s.name,
+      dept: s.dept || (p ? p.dept : '') || '',
+      sat:  p ? p.sat  : null,
+      sun:  p ? p.sun  : null,
+      note: p ? (p.note || '') : ''
+    };
+  });
+  apps.sort((a, b) => a.name.localeCompare(b.name));
+  _cachedApps = apps;
+
+  const satAttending = apps.filter(a => a.sat === true);
+  const sunAttending = apps.filter(a => a.sun === true);
+  renderDayList('sat', satAttending);
+  renderDayList('sun', sunAttending);
+  document.getElementById('satCountBadge').textContent = `${satAttending.length} attending`;
+  document.getElementById('sunCountBadge').textContent = `${sunAttending.length} attending`;
+}
+
+/* renderAdminLists — fetches prefs fresh (used after reset, fallback) */
+async function getMealApplications() {
   let sheetsPrefs = [];
   try {
     const res = await gasRequest('getPrefs');
@@ -58,45 +87,16 @@ async function getMealApplications() {
   } catch(e) {
     console.warn('Laforêt admin: Could not fetch prefs:', e.message);
   }
-
-  // Build map: normalizedName → pref
-  const prefMap = {};
-  sheetsPrefs.forEach(p => {
-    prefMap[normalizeName(p.name)] = p;
-  });
-
-  // Build full list from active staff
-  const apps = staffNames.map(name => {
-    const p = prefMap[normalizeName(name)];
-    return {
-      name,
-      dept: depts[name] || (p ? p.dept : '') || '',
-      sat:  p ? p.sat  : null,
-      sun:  p ? p.sun  : null,
-      note: p ? (p.note || '') : ''
-    };
-  });
-
-  apps.sort((a, b) => a.name.localeCompare(b.name));
-  _cachedApps = apps;
-  return apps;
+  _renderFromPrefs(staffNames.map(n => ({ name: n, dept: staffDepartments[n] || '' })), sheetsPrefs);
+  return _cachedApps;
 }
 
 async function renderAdminLists() {
-  // Show loading state
   ['satList','sunList'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.innerHTML = '<div class="admin-empty">Loading…</div>';
   });
-
-  const apps        = await getMealApplications();
-  const satAttending = apps.filter(a => a.sat === true);
-  const sunAttending = apps.filter(a => a.sun === true);
-
-  renderDayList('sat', satAttending);
-  renderDayList('sun', sunAttending);
-  document.getElementById('satCountBadge').textContent = `${satAttending.length} attending`;
-  document.getElementById('sunCountBadge').textContent = `${sunAttending.length} attending`;
+  await getMealApplications();
 }
 
 function renderDayList(day, attendees) {
@@ -126,7 +126,6 @@ function renderDayList(day, attendees) {
    STAFF LIST MODAL
    ════════════════════════════════════════════ */
 
-// Holds all staff rows for client-side filtering
 let _slAllStaff = [];
 
 function openStaffListModal() {
@@ -144,16 +143,13 @@ function closeStaffListModal(event) {
   document.getElementById('staffListOverlay').classList.remove('open');
 }
 
-/* Build the staff list from current live arrays */
 function slBuildList() {
-  const deptMap = getAllDepartments();
-  _slAllStaff = getActiveStaffNames()
-    .map(name => ({ name, dept: deptMap[name] || '' }))
+  _slAllStaff = staffNames
+    .map(name => ({ name, dept: staffDepartments[name] || '' }))
     .sort((a, b) => a.name.localeCompare(b.name));
   slRenderList(_slAllStaff);
 }
 
-/* Render rows (accepts filtered array) */
 function slRenderList(staff) {
   const listEl  = document.getElementById('slList');
   const countEl = document.getElementById('slCount');
@@ -168,7 +164,7 @@ function slRenderList(staff) {
 
   listEl.innerHTML = staff.map(function(s, idx) {
     const initials = s.name.split(' ').map(function(w){ return w[0]; }).join('').slice(0, 2).toUpperCase();
-    const safeName = s.name.replace(/'/g, "\\'");
+    const safeName = s.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     return '<div class="sl-staff-row" style="animation-delay:' + (idx * 0.03) + 's;">' +
       '<div class="sl-avatar">' + initials + '</div>' +
       '<div class="sl-info">' +
@@ -184,7 +180,6 @@ function slRenderList(staff) {
   }).join('');
 }
 
-/* Filter list by search input */
 function slFilterList() {
   const val = (document.getElementById('slSearchInput').value || '').trim().toLowerCase();
   if (!val) { slRenderList(_slAllStaff); return; }
@@ -194,7 +189,6 @@ function slFilterList() {
   slRenderList(filtered);
 }
 
-/* Add staff */
 async function slAddStaff() {
   const nameInput = document.getElementById('slNameInput');
   const deptInput = document.getElementById('slDeptInput');
@@ -207,10 +201,20 @@ async function slAddStaff() {
   const dupe = staffNames.find(function(n){ return normalizeName(n) === normalizeName(name); });
   if (dupe) { _slShowMsg('Staff already exists', 'err'); return; }
 
+  const addBtn = document.querySelector('.sl-add-btn');
+  if (addBtn) { addBtn.disabled = true; addBtn.textContent = 'Saving…'; }
+
   try {
-    await gasRequest('addStaff', { name, dept });
-    staffNames.push(name);
-    staffDepartments[name] = dept;
+    const res = await gasRequest('addStaff', { name, dept });
+    // Server returns updated staff list — apply it directly
+    if (res.staff) {
+      applyStaffList(res.staff);
+      setCachedStaff(res.staff);
+    } else {
+      // Fallback: manually push
+      staffNames.push(name);
+      staffDepartments[name] = dept;
+    }
     nameInput.value = '';
     deptInput.value = '';
     _slShowMsg(name + ' added successfully', 'ok');
@@ -218,20 +222,31 @@ async function slAddStaff() {
     await renderAdminLists();
   } catch(e) {
     _slShowMsg('Error: ' + e.message, 'err');
+  } finally {
+    if (addBtn) {
+      addBtn.disabled = false;
+      addBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add';
+    }
   }
 }
 
-/* Delete staff (called from row button) */
 async function slDeleteStaff(name) {
   if (!confirm('Remove ' + name + ' from the staff list?\nTheir meal choices will also be deleted.')) return;
 
   const normalizedName = normalizeName(name);
   try {
-    await gasRequest('deleteStaff', { name });
-    const idx = staffNames.findIndex(function(n){ return normalizeName(n) === normalizedName; });
-    if (idx >= 0) staffNames.splice(idx, 1);
-    const deptKey = Object.keys(staffDepartments).find(function(k){ return normalizeName(k) === normalizedName; });
-    if (deptKey) delete staffDepartments[deptKey];
+    const res = await gasRequest('deleteStaff', { name });
+    // Server returns updated staff list — apply it directly
+    if (res.staff) {
+      applyStaffList(res.staff);
+      setCachedStaff(res.staff);
+    } else {
+      // Fallback: manually remove
+      const idx = staffNames.findIndex(function(n){ return normalizeName(n) === normalizedName; });
+      if (idx >= 0) staffNames.splice(idx, 1);
+      const deptKey = Object.keys(staffDepartments).find(function(k){ return normalizeName(k) === normalizedName; });
+      if (deptKey) delete staffDepartments[deptKey];
+    }
     _slShowMsg(name + ' removed', 'ok');
     slBuildList();
     await renderAdminLists();
@@ -249,17 +264,17 @@ function _slShowMsg(text, type) {
 }
 
 /* ════════════════════════════════════════════
-   TEST RESET (admin button)
+   TEST RESET
    ════════════════════════════════════════════ */
 
 async function testWeeklyReset() {
   if (!confirm('Reset all Saturday/Sunday choices now?\nNotes, staff names, and departments will not be affected.')) return;
   try {
-    await forceResetPreferences(); // defined in script.js
+    await forceResetPreferences();
     await renderAdminLists();
     const { sat, sun } = getWeekendDates();
-    document.getElementById('adminSatDate').textContent  = sat;
-    document.getElementById('adminSunDate').textContent  = sun;
+    document.getElementById('adminSatDate').textContent    = sat;
+    document.getElementById('adminSunDate').textContent    = sun;
     document.getElementById('adminDatesBadge').textContent = `${sat} — ${sun}`;
     alert('Reset complete. All Saturday/Sunday meal choices have been cleared.');
   } catch(e) {
@@ -272,7 +287,6 @@ async function testWeeklyReset() {
    ════════════════════════════════════════════ */
 
 function printMealList(day) {
-  // Use cached apps if available, otherwise fetch
   const doprint = (apps) => {
     const { sat, sun } = getWeekendDates();
     const sections = [];
@@ -293,7 +307,7 @@ function printMealList(day) {
   if (_cachedApps) {
     doprint(_cachedApps);
   } else {
-    getMealApplications().then(doprint).catch(e => alert('Could not load data for printing: ' + e.message));
+    getMealApplications().then(() => doprint(_cachedApps)).catch(e => alert('Could not load data for printing: ' + e.message));
   }
 }
 
